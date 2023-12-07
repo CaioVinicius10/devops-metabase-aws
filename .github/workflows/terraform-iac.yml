@@ -1,43 +1,82 @@
-name: 'Terraform'
+name: Deploy Metabase - ECS
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-
-permissions:
-  contents: read
+    branches:
+      - main
 
 jobs:
   terraform:
-    name: 'Terraform'
     runs-on: ubuntu-latest
-    environment: production
-
-    defaults:
-      run:
-        shell: bash
 
     steps:
-    
-    - name: Checkout
-      uses: actions/checkout@v3
+    - name: Checkout Repository
+      uses: actions/checkout@v2
 
-    
-    - name: Setup Terraform
+    - name: Set up Terraform
       uses: hashicorp/setup-terraform@v1
       with:
-        cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+        terraform_version: 1.0.8
 
     - name: Terraform Init
       run: terraform init
 
-    - name: Terraform Format
-      run: terraform fmt -check
-
-    - name: Terraform Plan
-      run: terraform plan -input=false
+    - name: Terraform Validate
+      run: terraform validate
 
     - name: Terraform Apply
-      if: github.ref == 'refs/heads/"main"' && github.event_name == 'push'
-      run: terraform apply -auto-approve -input=false
+      run: terraform apply -auto-approve
+  
+  build-and-push-ecr:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v2
+
+    - name: Set up AWS CLI
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1  
+
+    - name: Log in to Amazon ECR
+      id: login-ecr
+      run: |
+        echo ${{ secrets.AWS_REGISTRY_PASSWORD }} | docker login --username AWS --password-stdin ${{ secrets.AWS_REGISTRY_URL }}
+
+    - name: Build and Push Docker Image
+      run: |
+        docker build -t your-docker-image .
+        docker tag your-docker-image:latest ${{ secrets.AWS_REGISTRY_URL }}/your-ecr-repository:latest
+        docker push ${{ secrets.AWS_REGISTRY_URL }}/your-ecr-repository:latest
+
+  deploy-ecs:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v2
+
+    - name: Set up AWS CLI
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+
+    - name: Configure AWS ECS
+      run: |
+        echo "ECS_CLUSTER=your-ecs-cluster" >> $GITHUB_ENV
+        echo "AWS_ACCOUNT_URL=$AWS_ACCOUNT_URL" >> $GITHUB_ENV
+
+    - name: Update ECS Task Definition
+      run: aws ecs register-task-definition --cli-input-json file=ecs-task-definition.json
+
+    - name: Update ECS Service
+      run: |
+        aws ecs update-service \
+          --cluster $ECS_CLUSTER \
+          --service your-ecs-service \
+          --task-definition your-ecs-task-family:latest
